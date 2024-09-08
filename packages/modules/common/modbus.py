@@ -11,13 +11,13 @@ import time
 from typing import Any, Callable, Iterable, Optional, Union, overload, List
 
 import pymodbus
-from pymodbus.client import ModbusTcpClient, ModbusSerialClient  # Geänderter Import für die Clients
+from pymodbus.client.sync import ModbusTcpClient, ModbusSerialClient
 from pymodbus.constants import Endian
 from pymodbus.payload import BinaryPayloadDecoder
-from pymodbus.exceptions import ModbusIOException, ConnectionException  # Import von spezifischen Exceptions
 from urllib3.util import parse_url
 
 log = logging.getLogger(__name__)
+
 
 class ModbusDataType(Enum):
     UINT_8 = 8, "decode_8bit_uint"
@@ -58,15 +58,15 @@ class ModbusClient:
 
     def __enter__(self):
         try:
-            self._delegate.connect()  # In pymodbus 3.x wird connect() explizit aufgerufen
+            self._delegate.__enter__()
             time.sleep(self.sleep_after_connect)
-        except ConnectionException as e:
+        except pymodbus.exceptions.ConnectionException as e:
             e.args += (NO_CONNECTION.format(self.address, self.port),)
             raise e
         return self
 
     def __exit__(self, exc_type, exc_value, exc_traceback):
-        self._delegate.close()
+        self._delegate.__exit__(exc_type, exc_value, exc_traceback)
 
     def connect(self) -> None:
         self._delegate.connect()
@@ -88,7 +88,7 @@ class ModbusClient:
                          byteorder: Endian = Endian.Big,
                          wordorder: Endian = Endian.Big,
                          **kwargs):
-        if not self.is_socket_open():
+        if self.is_socket_open() is False:
             self.connect()
         try:
             multi_request = isinstance(types, Iterable)
@@ -108,11 +108,11 @@ class ModbusClient:
             result = [struct.unpack(">e", struct.pack(">H", decoder.decode_16bit_uint())) if t ==
                       ModbusDataType.FLOAT_16 else getattr(decoder, t.decoding_method)() for t in types]
             return result if multi_request else result[0]
-        except ConnectionException as e:
+        except pymodbus.exceptions.ConnectionException as e:
             self.close()
             e.args += (NO_CONNECTION.format(self.address, self.port),)
             raise e
-        except ModbusIOException as e:
+        except pymodbus.exceptions.ModbusIOException as e:
             self.close()
             e.args += (NO_VALUES.format(self.address, self.port),)
             raise e
@@ -178,10 +178,10 @@ class ModbusClient:
             if response.isError():
                 raise Exception(__name__+" "+str(response))
             return response.bits[0] if count == 1 else response.bits[:count]
-        except ConnectionException as e:
+        except pymodbus.exceptions.ConnectionException as e:
             e.args += (NO_CONNECTION.format(self.address, self.port),)
             raise e
-        except ModbusIOException as e:
+        except pymodbus.exceptions.ModbusIOException as e:
             e.args += (NO_VALUES.format(self.address, self.port),)
             raise e
 
@@ -195,4 +195,25 @@ class ModbusTcpClient_(ModbusClient):
                  port: int = 502,
                  sleep_after_connect: Optional[int] = 0,
                  **kwargs):
-        parsed_url = parse
+        parsed_url = parse_url(address)
+        host = parsed_url.host
+        if parsed_url.port is not None:
+            port = parsed_url.port
+        super().__init__(ModbusTcpClient(host, port, **kwargs), address, port, sleep_after_connect)
+
+
+class ModbusSerialClient_(ModbusClient):
+    def __init__(self,
+                 port: int,
+                 sleep_after_connect: Optional[int] = 0,
+                 **kwargs):
+        super().__init__(ModbusSerialClient(method="rtu",
+                                            port=port,
+                                            baudrate=9600,
+                                            stopbits=1,
+                                            bytesize=8,
+                                            timeout=1,
+                                            **kwargs),
+                         "Serial",
+                         port,
+                         sleep_after_connect

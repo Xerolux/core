@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 import logging
-from typing import Dict, Tuple, Union
+from typing import Dict, Tuple, Union, Optional
 
 from pymodbus.constants import Endian
-
 from dataclass_utils import dataclass_from_dict
 from modules.common import modbus
 from modules.common.abstract_device import AbstractBat
@@ -16,9 +15,6 @@ from modules.common.store import get_bat_value_store
 from modules.devices.solaredge.solaredge.config import SolaredgeBatSetup
 
 log = logging.getLogger(__name__)
-
-FLOAT32_UNSUPPORTED = -0xffffff00000000000000000000000000
-
 
 class SolaredgeBat(AbstractBat):
     def __init__(self,
@@ -48,15 +44,28 @@ class SolaredgeBat(AbstractBat):
     def get_values(self) -> Tuple[float, float]:
         unit = self.component_config.configuration.modbus_id
         soc = self.__tcp_client.read_holding_registers(
-            62852, ModbusDataType.FLOAT_32, wordorder=Endian.Little, unit=unit)
+            0xE184, ModbusDataType.FLOAT_32, wordorder=Endian.Little, unit=unit)  # SOC
         power = self.__tcp_client.read_holding_registers(
-            62836, ModbusDataType.FLOAT_32, wordorder=Endian.Little, unit=unit)
-        if power == FLOAT32_UNSUPPORTED:
-            power = 0
+            0xE174, ModbusDataType.FLOAT_32, wordorder=Endian.Little, unit=unit)  # Leistung
         return power, soc
 
-    def get_imported_exported(self, power: float) -> Tuple[float, float]:
-        return self.sim_counter.sim_count(power)
+    def set_power_limit(self, power_limit: Optional[int]) -> None:
+        """
+        Setzt die Leistungsbegrenzung des Speichers.
+
+        :param power_limit: Lade-/Entladeleistung in Watt.
+                            - Eine Zahl schaltet auf aktive Steuerung um.
+                            - None übergibt die Null-Punkt-Ausregelung an den Speicher.
+        """
+        unit = self.component_config.configuration.modbus_id
+
+        # Speichersteuerung umschalten, je nach Wert
+        if power_limit is None:
+            # Null-Punkt-Ausregelung
+            self.__tcp_client.write_registers(0xE010, 0, unit=unit)
+        else:
+            # Lade-/Entladeleistung setzen
+            self.__tcp_client.write_registers(0xE010, power_limit, unit=unit)
 
 
 component_descriptor = ComponentDescriptor(configuration_factory=SolaredgeBatSetup)

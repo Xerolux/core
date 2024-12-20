@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import logging
-from typing import Dict, Tuple, Union, Optional
+from typing import Optional, Dict, Tuple, Union
 
 from pymodbus.constants import Endian
 from dataclass_utils import dataclass_from_dict
@@ -54,18 +54,18 @@ class SolaredgeBat(AbstractBat):
         Setzt die Leistungsbegrenzung des Speichers.
 
         :param power_limit: Lade-/Entladeleistung in Watt.
-                            - Eine Zahl schaltet auf aktive Steuerung um.
+                            - Eine Zahl schaltet auf aktive Speichersteuerung um.
                             - None übergibt die Null-Punkt-Ausregelung an den Speicher.
         """
         unit = self.component_config.configuration.modbus_id
+        reg = 0xE00E if power_limit is not None else 0xE010  # Unterschiedliche Register für Laden/Entladen
 
-        # Speichersteuerung umschalten, je nach Wert
         if power_limit is None:
-            # Null-Punkt-Ausregelung
+            # Null-Punkt-Ausregelung aktivieren
             self.__tcp_client.write_registers(0xE010, 0, unit=unit)
         else:
             # Lade-/Entladeleistung setzen
-            self.__tcp_client.write_registers(0xE010, power_limit, unit=unit)
+            self.__tcp_client.write_registers(reg, power_limit, unit=unit)
 
 
 component_descriptor = ComponentDescriptor(configuration_factory=SolaredgeBatSetup)

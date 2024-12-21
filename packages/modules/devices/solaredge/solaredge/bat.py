@@ -16,26 +16,41 @@ from modules.devices.solaredge.solaredge.config import SolaredgeBatSetup
 
 log = logging.getLogger(__name__)
 
+class SolaredgeConfig:
+    """
+    Konfigurationsklasse, um Registeradressen flexibel zu halten.
+    Hier kannst du die Adressen anpassen, falls sich diese ändern.
+    """
+    def __init__(self):
+        self.control_mode_register = 0xE00E  # Register für Control Mode
+        self.power_limit_register = 0xE010  # Register für Leistungsbegrenzung
+        self.soc_register = 0xE184  # Register für SOC
+        self.power_register = 0xE174  # Register für Leistung
+
+
 class SolaredgeBat(AbstractBat):
     """
     Klasse zur Steuerung eines SolarEdge-Speichers.
-    Unterstützt das Lesen und Schreiben von Modbus-Parametern.
+    Unterstützt das Lesen und Schreiben von Modbus-Parametern mit flexibler Konfiguration.
     """
 
     def __init__(self,
                  device_id: int,
                  component_config: Union[Dict, SolaredgeBatSetup],
-                 tcp_client: modbus.ModbusTcpClient_) -> None:
+                 tcp_client: modbus.ModbusTcpClient_,
+                 config: SolaredgeConfig) -> None:
         """
         Initialisiert die SolaredgeBat-Klasse.
 
         :param device_id: ID des Geräts.
         :param component_config: Konfigurationsdaten für das Gerät.
         :param tcp_client: Modbus-TCP-Client zur Kommunikation.
+        :param config: Instanz der Konfigurationsklasse mit Registeradressen.
         """
         self.__device_id = device_id
         self.component_config = dataclass_from_dict(SolaredgeBatSetup, component_config)
         self.__tcp_client = tcp_client
+        self.config = config  # Konfigurationsparameter
         self.sim_counter = SimCounter(self.__device_id, self.component_config.id, prefix="speicher")
         self.store = get_bat_value_store(self.component_config.id)
         self.fault_state = FaultState(ComponentInfo.from_component_config(self.component_config))
@@ -69,8 +84,8 @@ class SolaredgeBat(AbstractBat):
         """
         unit = self.component_config.configuration.modbus_id
 
-        # SOC aus zwei aufeinanderfolgenden Registern lesen (0xE184)
-        soc_registers = self.__tcp_client.read_holding_registers(0xE184, count=2, unit=unit)
+        # SOC aus konfiguriertem Register lesen
+        soc_registers = self.__tcp_client.read_holding_registers(self.config.soc_register, count=2, unit=unit)
         if not soc_registers.isError():
             soc_decoder = BinaryPayloadDecoder.fromRegisters(
                 soc_registers.registers, byteorder=Endian.Little, wordorder=Endian.Little
@@ -79,8 +94,8 @@ class SolaredgeBat(AbstractBat):
         else:
             raise Exception(f"Fehler beim Lesen von SOC: {soc_registers}")
 
-        # Leistung aus zwei aufeinanderfolgenden Registern lesen (0xE174)
-        power_registers = self.__tcp_client.read_holding_registers(0xE174, count=2, unit=unit)
+        # Leistung aus konfiguriertem Register lesen
+        power_registers = self.__tcp_client.read_holding_registers(self.config.power_register, count=2, unit=unit)
         if not power_registers.isError():
             power_decoder = BinaryPayloadDecoder.fromRegisters(
                 power_registers.registers, byteorder=Endian.Little, wordorder=Endian.Little
@@ -97,12 +112,11 @@ class SolaredgeBat(AbstractBat):
 
         :return: Der aktuelle Control Mode als Integer.
         """
-        REGISTER_CONTROL_MODE = 0xE00E  # Alte Registeradresse für Control Mode
         unit = self.component_config.configuration.modbus_id
 
         try:
-            # Control Mode aus dem Register lesen
-            response = self.__tcp_client.read_holding_registers(REGISTER_CONTROL_MODE, count=1, unit=unit)
+            # Control Mode aus konfiguriertem Register lesen
+            response = self.__tcp_client.read_holding_registers(self.config.control_mode_register, count=1, unit=unit)
             if not response.isError():
                 return response.registers[0]
             else:
@@ -117,17 +131,17 @@ class SolaredgeBat(AbstractBat):
 
         :param mode: Der gewünschte Control Mode (z. B. 4 für dynamische Leistungsbegrenzung).
         """
-        REGISTER_CONTROL_MODE = 0xE00E  # Alte Registeradresse für Control Mode
         unit = self.component_config.configuration.modbus_id
 
         try:
+            # Aktuellen Control Mode abrufen
             current_mode = self.get_control_mode()
             if current_mode == mode:
                 log.info(f"Control Mode ist bereits auf {mode} gesetzt.")
                 return  # Kein Schreibvorgang erforderlich
 
-            # Neuen Control Mode schreiben
-            self.__tcp_client.write_register(REGISTER_CONTROL_MODE, mode, unit=unit)
+            # Neuen Control Mode in konfiguriertes Register schreiben
+            self.__tcp_client.write_register(self.config.control_mode_register, mode, unit=unit)
             log.info(f"Control Mode erfolgreich auf {mode} gesetzt.")
         except Exception as e:
             log.error(f"Fehler beim Setzen des Control Modes: {e}")
@@ -141,7 +155,6 @@ class SolaredgeBat(AbstractBat):
                             - Eine Zahl aktiviert die aktive Speichersteuerung.
                             - None setzt die Leistungsbegrenzung zurück.
         """
-        REGISTER_POWER_LIMIT = 0xE010  # Alte Registeradresse für die Leistungsbegrenzung
         unit = self.component_config.configuration.modbus_id
 
         try:
@@ -150,22 +163,23 @@ class SolaredgeBat(AbstractBat):
 
             if power_limit is None:
                 # Null-Punkt-Ausregelung aktivieren
-                self.__tcp_client.write_registers(REGISTER_POWER_LIMIT, [0, 0], unit=unit)
+                self.__tcp_client.write_registers(self.config.power_limit_register, [0, 0], unit=unit)
             else:
                 if power_limit < 0:
                     raise ValueError("Die Leistungsbegrenzung muss eine positive Zahl sein.")
-                
+
                 # Float32-Wert in Modbus-kompatibles Format konvertieren
                 builder = BinaryPayloadBuilder(byteorder=Endian.Little, wordorder=Endian.Little)
                 builder.add_32bit_float(power_limit)
                 registers = builder.to_registers()
-                
-                # Leistungsbegrenzung schreiben
-                self.__tcp_client.write_registers(REGISTER_POWER_LIMIT, registers, unit=unit)
+
+                # Leistungsbegrenzung in konfiguriertes Register schreiben
+                self.__tcp_client.write_registers(self.config.power_limit_register, registers, unit=unit)
                 log.info(f"Leistungsbegrenzung erfolgreich auf {power_limit} W gesetzt.")
         except Exception as e:
             log.error(f"Fehler beim Setzen der Leistungsbegrenzung: {e}")
             raise
 
 
+# Beschreibung der Konfigurationskomponente
 component_descriptor = ComponentDescriptor(configuration_factory=SolaredgeBatSetup)

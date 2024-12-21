@@ -10,6 +10,7 @@ from modules.common.abstract_device import AbstractBat
 from modules.common.component_state import BatState
 from modules.common.component_type import ComponentDescriptor
 from modules.common.fault_state import ComponentInfo, FaultState
+from modules.common.modbus import ModbusDataType
 from modules.common.simcount import SimCounter
 from modules.common.store import get_bat_value_store
 from modules.devices.solaredge.solaredge.config import SolaredgeBatSetup
@@ -73,14 +74,14 @@ class SolaredgeBat(AbstractBat):
 
     def set_power_limit(self, power_limit: Optional[float]) -> None:
         """
-        Setzt die Leistungsbegrenzung des Speichers (Float32-Unterstützung).
+        Setzt die Leistungsbegrenzung des Speichers mit Unterstützung für Float32 und Little-Endian.
 
-        :param power_limit: Lade-/Entladeleistung in Watt.
+        :param power_limit: Lade-/Entladeleistung in Watt als Float.
                             - Eine Zahl aktiviert die aktive Speichersteuerung.
                             - None aktiviert die Null-Punkt-Ausregelung.
         """
-        REGISTER_LOAD_UNLOAD = 0xE00E
-        REGISTER_ZERO_BALANCE = 0xE010
+        REGISTER_LOAD_UNLOAD = 0xE00E  # Register für Lade-/Entladeleistung
+        REGISTER_ZERO_BALANCE = 0xE010  # Register für Null-Punkt-Ausregelung
         unit = self.component_config.configuration.modbus_id
 
         try:
@@ -99,7 +100,7 @@ class SolaredgeBat(AbstractBat):
                 # Lade-/Entladeleistung setzen
                 self.__tcp_client.write_registers(REGISTER_LOAD_UNLOAD, registers, unit=unit)
         except Exception as e:
-            logging.error(f"Fehler beim Setzen der Leistungsbegrenzung: {e}")
+            log.error(f"Fehler beim Setzen der Leistungsbegrenzung: {e}")
             raise
 
 

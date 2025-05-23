@@ -16,7 +16,14 @@ from modules.devices.solaredge.solaredge.config import SolaredgeBatSetup
 
 log = logging.getLogger(__name__)
 
+# Known value returned by some SolarEdge meters for unsupported float32 registers
 FLOAT32_UNSUPPORTED = -0xffffff00000000000000000000000000
+# According to SolarEdge documentation, battery registers start at 0xE100.
+# Common registers (may vary by specific battery model/firmware):
+# Using decimal equivalents for addresses provided in some SE docs (e.g., 57600 for 0xE100)
+# For the specific LG Chem RESU, addresses like 62836 (Power) and 62852 (SoC) are used.
+REG_BAT_POWER = 62836  # Instantaneous Power (W)
+REG_BAT_SOC = 62852    # State of Charge (%)
 
 
 class KwargsDict(TypedDict):
@@ -37,11 +44,21 @@ class SolaredgeBat(AbstractBat):
         self.fault_state = FaultState(ComponentInfo.from_component_config(self.component_config))
 
     def update(self) -> None:
-        self.store.set(self.read_state())
+        log.debug("Updating SolaredgeBat id: %s", self.component_config.id)
+        try:
+            state = self.read_state()
+            self.store.set(state)
+            self.fault_state.set_fault(False)
+        except Exception as e:
+            log.error("Error updating SolaredgeBat id %s: %s", self.component_config.id, e, exc_info=True)
+            self.fault_state.set_fault(True)
 
     def read_state(self):
+        log.debug("Reading state for SolaredgeBat id: %s", self.component_config.id)
         power, soc = self.get_values()
         imported, exported = self.get_imported_exported(power)
+        log.debug("SolaredgeBat %s: Power: %.2fW, SoC: %.2f%%, Imported: %.2fWh, Exported: %.2fWh",
+                  self.component_config.id, power, soc, imported, exported)
         return BatState(
             power=power,
             soc=soc,
@@ -51,12 +68,21 @@ class SolaredgeBat(AbstractBat):
 
     def get_values(self) -> Tuple[float, float]:
         unit = self.component_config.configuration.modbus_id
+        log.debug("Reading SoC from reg %s for unit %s", REG_BAT_SOC, unit)
         soc = self.__tcp_client.read_holding_registers(
-            62852, ModbusDataType.FLOAT_32, wordorder=Endian.Little, unit=unit)
+            REG_BAT_SOC, ModbusDataType.FLOAT_32, wordorder=Endian.Little, unit=unit)
+        log.debug("Reading Power from reg %s for unit %s", REG_BAT_POWER, unit)
         power = self.__tcp_client.read_holding_registers(
-            62836, ModbusDataType.FLOAT_32, wordorder=Endian.Little, unit=unit)
+            REG_BAT_POWER, ModbusDataType.FLOAT_32, wordorder=Endian.Little, unit=unit)
+
         if power == FLOAT32_UNSUPPORTED:
+            log.debug("SolaredgeBat %s: Read power as FLOAT32_UNSUPPORTED, setting to 0.", self.component_config.id)
             power = 0
+        if soc == FLOAT32_UNSUPPORTED: # Also check SoC for unsupported value
+            log.debug("SolaredgeBat %s: Read SoC as FLOAT32_UNSUPPORTED, setting to 0.", self.component_config.id)
+            soc = 0
+            
+        log.debug("SolaredgeBat %s: Raw values: Power: %.2fW, SoC: %.2f%%", self.component_config.id, power, soc)
         return power, soc
 
     def get_imported_exported(self, power: float) -> Tuple[float, float]:

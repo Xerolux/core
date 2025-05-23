@@ -42,15 +42,23 @@ class E3dcBat(AbstractBat):
         self.fault_state = FaultState(ComponentInfo.from_component_config(self.component_config))
 
     def update(self) -> None:
-        soc, power = read_bat(self.client, self.__modbus_id)
-        imported, exported = self.sim_counter.sim_count(power)
-        bat_state = BatState(
-            power=power,
-            soc=soc,
-            imported=imported,
-            exported=exported
-        )
-        self.store.set(bat_state)
+        try:
+            soc, power = read_bat(self.client, self.__modbus_id)
+            imported, exported = self.sim_counter.sim_count(power)
+            bat_state = BatState(
+                power=power,
+                soc=soc,
+                imported=imported,
+                exported=exported
+            )
+            self.store.set(bat_state)
+            self.fault_state.set_fault(False)
+        except Exception as e:
+            log.error(
+                f"Error updating E3DC Battery id: {self.component_config.id}: {e}",
+                exc_info=True
+            )
+            self.fault_state.set_fault(True)
 
 
 component_descriptor = ComponentDescriptor(configuration_factory=E3dcBatSetup)

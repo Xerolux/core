@@ -3,12 +3,16 @@ from typing import TypedDict, Any
 from modules.common import modbus
 from modules.common.abstract_device import AbstractCounter
 from modules.common.component_state import CounterState
+import logging
+
 from modules.common.component_type import ComponentDescriptor
 from modules.common.fault_state import ComponentInfo, FaultState
 from modules.common.modbus import ModbusDataType
 from modules.common.simcount import SimCounter
 from modules.common.store import get_counter_value_store
 from modules.devices.huawei.huawei_smartlogger.config import Huawei_SmartloggerCounterSetup
+
+log = logging.getLogger(__name__)
 
 
 class KwargsDict(TypedDict):
@@ -30,23 +34,34 @@ class Huawei_SmartloggerCounter(AbstractCounter):
 
     def update(self) -> None:
         modbus_id = self.component_config.configuration.modbus_id
-        power = self.client.read_holding_registers(32278, ModbusDataType.INT_32, unit=modbus_id)
-        currents = [val / 100 for val in self.client.read_holding_registers(
-            32272, [ModbusDataType.INT_32] * 3, unit=modbus_id)]
-        voltages = [val / 100 for val in self.client.read_holding_registers(
-            32260, [ModbusDataType.INT_32] * 3, unit=modbus_id)]
-        powers = [val / 1000 for val in self.client.read_holding_registers(
-            32335, [ModbusDataType.INT_32] * 3, unit=modbus_id)]
-        imported, exported = self.sim_counter.sim_count(power)
-        counter_state = CounterState(
-            currents=currents,
-            imported=imported,
-            exported=exported,
-            power=power,
-            powers=powers,
-            voltages=voltages
-        )
-        self.store.set(counter_state)
+        try:
+            # Wordorder for multi-register reads defaults to Big Endian via common.modbus.py.
+            # This is generally appropriate for Huawei devices.
+            power = self.client.read_holding_registers(32278, ModbusDataType.INT_32, unit=modbus_id)
+            currents = [val / 100 for val in self.client.read_holding_registers(
+                32272, [ModbusDataType.INT_32] * 3, unit=modbus_id)]
+            voltages = [val / 100 for val in self.client.read_holding_registers(
+                32260, [ModbusDataType.INT_32] * 3, unit=modbus_id)]
+            powers = [val / 1000 for val in self.client.read_holding_registers(
+                32335, [ModbusDataType.INT_32] * 3, unit=modbus_id)]
+            
+            imported, exported = self.sim_counter.sim_count(power)
+            counter_state = CounterState(
+                currents=currents,
+                imported=imported,
+                exported=exported,
+                power=power,
+                powers=powers,
+                voltages=voltages
+            )
+            self.store.set(counter_state)
+            self.fault_state.set_fault(False)
+        except Exception as e:
+            log.error(
+                f"Error updating Huawei Smartlogger Counter id: {self.component_config.id}: {e}",
+                exc_info=True
+            )
+            self.fault_state.set_fault(True)
 
 
 component_descriptor = ComponentDescriptor(configuration_factory=Huawei_SmartloggerCounterSetup)

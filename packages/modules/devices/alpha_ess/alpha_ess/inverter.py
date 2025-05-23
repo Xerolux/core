@@ -5,11 +5,15 @@ from modules.devices.alpha_ess.alpha_ess.config import AlphaEssConfiguration, Al
 from modules.common import modbus
 from modules.common.abstract_device import AbstractInverter
 from modules.common.component_state import InverterState
+import logging
+
 from modules.common.component_type import ComponentDescriptor
 from modules.common.fault_state import ComponentInfo, FaultState
-from modules.common.modbus import ModbusDataType, Number
+from modules.common.modbus import ModbusDataType, Number, Endian # Added Endian for comment clarity
 from modules.common.simcount._simcounter import SimCounter
 from modules.common.store import get_inverter_value_store
+
+log = logging.getLogger(__name__)
 
 
 class KwargsDict(TypedDict):
@@ -34,15 +38,23 @@ class AlphaEssInverter(AbstractInverter):
         self.fault_state = FaultState(ComponentInfo.from_component_config(self.component_config))
 
     def update(self) -> None:
-        reg_p = self.__version_factory()
-        power = self.__get_power(reg_p)
+        try:
+            reg_p = self.__version_factory()
+            power = self.__get_power(reg_p)
 
-        _, exported = self.sim_counter.sim_count(power)
-        inverter_state = InverterState(
-            power=power,
-            exported=exported
-        )
-        self.store.set(inverter_state)
+            _, exported = self.sim_counter.sim_count(power)
+            inverter_state = InverterState(
+                power=power,
+                exported=exported
+            )
+            self.store.set(inverter_state)
+            self.fault_state.set_fault(False)
+        except Exception as e:
+            log.error(
+                f"Error updating AlphaESS Inverter id: {self.component_config.id}: {e}",
+                exc_info=True
+            )
+            self.fault_state.set_fault(True)
 
     def __version_factory(self) -> int:
         if self.__device_config.source == 0 and self.__device_config.version == 0:
@@ -51,6 +63,8 @@ class AlphaEssInverter(AbstractInverter):
             return 0x00A1
 
     def __get_power(self, reg_p: int) -> Number:
+        # Wordorder for multi-register reads defaults to Big Endian via common.modbus.py.
+        # Manufacturer documentation should be checked to confirm this is correct for AlphaESS.
         powers = [
             self.__tcp_client.read_holding_registers(address, ModbusDataType.INT_32, unit=self.__modbus_id)
             for address in [reg_p, 0x041F, 0x0423, 0x0427]

@@ -40,7 +40,16 @@ class SmaSunnyBoyInverter(AbstractInverter):
         self.sim_counter = SimCounter(self.kwargs['device_id'], self.component_config.id, prefix="Wechselrichter")
 
     def update(self) -> None:
-        self.store.set(self.read())
+        try:
+            state = self.read()
+            self.store.set(state)
+            self.fault_state.set_fault(False)
+        except Exception as e:
+            log.error(
+                f"Error updating SMA Sunny Boy Inverter id: {self.component_config.id}: {e}",
+                exc_info=True
+            )
+            self.fault_state.set_fault(True)
 
     def read(self) -> InverterState:
         unit = self.component_config.configuration.modbus_id

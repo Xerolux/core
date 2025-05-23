@@ -34,13 +34,29 @@ class Huawei_SmartloggerInverter(AbstractInverter):
 
     def update(self) -> None:
         modbus_id = self.component_config.configuration.modbus_id
-        power = self.client.read_holding_registers(32080, ModbusDataType.INT_32, unit=modbus_id) * -1
-        exported = self.client.read_holding_registers(32106, ModbusDataType.INT_32, unit=modbus_id) * 10
-        inverter_state = InverterState(
-            power=power,
-            exported=exported
-        )
-        self.store.set(inverter_state)
+        try:
+            # Wordorder for multi-register reads defaults to Big Endian via common.modbus.py.
+            # This is generally appropriate for Huawei devices.
+            power = self.client.read_holding_registers(32080, ModbusDataType.INT_32, unit=modbus_id) * -1
+            
+            # Note: Exported energy (reg 32106) is read as INT_32. Typically, energy accumulation registers are UINT_32 or UINT_64.
+            # If this register can indeed be negative or represents a net value, INT_32 is appropriate.
+            # Otherwise, if it's always positive and accumulating, UINT_32 might be more standard.
+            # Assuming current INT_32 typing is based on specific device behavior.
+            exported = self.client.read_holding_registers(32106, ModbusDataType.INT_32, unit=modbus_id) * 10
+            
+            inverter_state = InverterState(
+                power=power,
+                exported=exported
+            )
+            self.store.set(inverter_state)
+            self.fault_state.set_fault(False)
+        except Exception as e:
+            log.error(
+                f"Error updating Huawei Smartlogger Inverter id: {self.component_config.id}: {e}",
+                exc_info=True
+            )
+            self.fault_state.set_fault(True)
 
 
 component_descriptor = ComponentDescriptor(configuration_factory=Huawei_SmartloggerInverterSetup)

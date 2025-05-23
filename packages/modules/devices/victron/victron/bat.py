@@ -4,12 +4,16 @@ from typing import Any, TypedDict
 from modules.common import modbus
 from modules.common.abstract_device import AbstractBat
 from modules.common.component_state import BatState
+import logging
+
 from modules.common.component_type import ComponentDescriptor
 from modules.common.fault_state import ComponentInfo, FaultState
 from modules.common.modbus import ModbusDataType
 from modules.common.simcount import SimCounter
 from modules.common.store import get_bat_value_store
 from modules.devices.victron.victron.config import VictronBatSetup
+
+log = logging.getLogger(__name__)
 
 
 class KwargsDict(TypedDict):
@@ -31,18 +35,27 @@ class VictronBat(AbstractBat):
 
     def update(self) -> None:
         modbus_id = self.component_config.configuration.modbus_id
-        with self.__tcp_client:
-            power = self.__tcp_client.read_holding_registers(842, ModbusDataType.INT_16, unit=modbus_id)
-            soc = self.__tcp_client.read_holding_registers(843, ModbusDataType.UINT_16, unit=modbus_id)
+        try:
+            with self.__tcp_client:
+                # Wordorder not applicable for INT_16/UINT_16
+                power = self.__tcp_client.read_holding_registers(842, ModbusDataType.INT_16, unit=modbus_id)
+                soc = self.__tcp_client.read_holding_registers(843, ModbusDataType.UINT_16, unit=modbus_id)
 
-        imported, exported = self.sim_counter.sim_count(power)
-        bat_state = BatState(
-            power=power,
-            soc=soc,
-            imported=imported,
-            exported=exported
-        )
-        self.store.set(bat_state)
+            imported, exported = self.sim_counter.sim_count(power)
+            bat_state = BatState(
+                power=power,
+                soc=soc,
+                imported=imported,
+                exported=exported
+            )
+            self.store.set(bat_state)
+            self.fault_state.set_fault(False)
+        except Exception as e:
+            log.error(
+                f"Error updating Victron Battery id: {self.component_config.id}: {e}",
+                exc_info=True
+            )
+            self.fault_state.set_fault(True)
 
 
 component_descriptor = ComponentDescriptor(configuration_factory=VictronBatSetup)

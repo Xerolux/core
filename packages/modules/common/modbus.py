@@ -100,8 +100,10 @@ class ModbusClient:
 
             number_of_addresses = sum(divide_rounding_up(
                 t.bits, _MODBUS_HOLDING_REGISTER_SIZE) for t in types)
+            # Ensure all parameters are passed as keyword arguments
+            # address and count (number_of_addresses) are primary, others via kwargs (e.g., unit)
             response = read_register_method(
-                address, number_of_addresses, **kwargs)
+                address=address, count=number_of_addresses, **kwargs)
             if response.isError():
                 raise Exception(__name__+" "+str(response))
             decoder = BinaryPayloadDecoder.fromRegisters(response.registers, byteorder, wordorder)
@@ -174,7 +176,8 @@ class ModbusClient:
 
     def read_coils(self, address: int, count: int, **kwargs):
         try:
-            response = self._delegate.read_coils(address, count, **kwargs)
+            # Ensure all parameters are passed as keyword arguments
+            response = self._delegate.read_coils(address=address, count=count, **kwargs)
             if response.isError():
                 raise Exception(__name__+" "+str(response))
             return response.bits[0] if count == 1 else response.bits[:count]
@@ -186,10 +189,13 @@ class ModbusClient:
             raise e
 
     def write_registers(self, address: int, value: Any, **kwargs):
-        self._delegate.write_registers(address, value, **kwargs)
+        # Ensure all parameters are passed as keyword arguments
+        # Note: pymodbus uses 'values' for the list of registers
+        self._delegate.write_registers(address=address, values=value, **kwargs)
 
     def write_single_coil(self, address: int, value: Any, **kwargs):
-        self._delegate.write_coil(address, value, **kwargs)
+        # Ensure all parameters are passed as keyword arguments
+        self._delegate.write_coil(address=address, value=value, **kwargs)
 
 
 class ModbusTcpClient_(ModbusClient):

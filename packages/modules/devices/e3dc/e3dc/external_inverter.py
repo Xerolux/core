@@ -41,17 +41,25 @@ class E3dcExternalInverter(AbstractInverter):
         self.fault_state = FaultState(ComponentInfo.from_component_config(self.component_config))
 
     def update(self) -> None:
-        pv_external = read_external_inverter(self.client, self.__modbus_id)
-        # pv_external - > pv Leistung
-        # die als externe Produktion an e3dc angeschlossen ist
-        # Im gegensatz zur Implementierung in Version 1.9 wird nicht mehr die PV
-        # Leistung vom WR1 gelesen, da die durch v2.0 separat gehandelt wird
-        _, pv_exported = self.sim_counter.sim_count(pv_external)
-        inverter_state = InverterState(
-            power=pv_external,
-            exported=pv_exported
-        )
-        self.store.set(inverter_state)
+        try:
+            pv_external = read_external_inverter(self.client, self.__modbus_id)
+            # pv_external - > pv Leistung
+            # die als externe Produktion an e3dc angeschlossen ist
+            # Im gegensatz zur Implementierung in Version 1.9 wird nicht mehr die PV
+            # Leistung vom WR1 gelesen, da die durch v2.0 separat gehandelt wird
+            _, pv_exported = self.sim_counter.sim_count(pv_external)
+            inverter_state = InverterState(
+                power=pv_external,
+                exported=pv_exported
+            )
+            self.store.set(inverter_state)
+            self.fault_state.set_fault(False)
+        except Exception as e:
+            log.error(
+                f"Error updating E3DC External Inverter id: {self.component_config.id}: {e}",
+                exc_info=True
+            )
+            self.fault_state.set_fault(True)
 
 
 component_descriptor = ComponentDescriptor(configuration_factory=E3dcExternalInverterSetup)

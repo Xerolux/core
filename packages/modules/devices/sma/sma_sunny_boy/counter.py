@@ -4,12 +4,16 @@ from typing import TypedDict, Any
 from modules.common import modbus
 from modules.common.abstract_device import AbstractCounter
 from modules.common.component_state import CounterState
+import logging
+
 from modules.common.component_type import ComponentDescriptor
 from modules.common.fault_state import ComponentInfo, FaultState
 from modules.common.modbus import ModbusDataType
 from modules.common.simcount import SimCounter
 from modules.common.store import get_counter_value_store
 from modules.devices.sma.sma_sunny_boy.config import SmaSunnyBoyCounterSetup
+
+log = logging.getLogger(__name__)
 
 
 class KwargsDict(TypedDict):
@@ -31,22 +35,32 @@ class SmaSunnyBoyCounter(AbstractCounter):
 
     def update(self):
         unit = self.component_config.configuration.modbus_id
+        try:
+            # Wordorder for multi-register reads defaults to Big Endian via common.modbus.py.
+            # This is generally appropriate for SMA devices.
+            imp = self.__tcp_client.read_holding_registers(30865, ModbusDataType.UINT_32, unit=unit)
+            exp = self.__tcp_client.read_holding_registers(30867, ModbusDataType.UINT_32, unit=unit)
+            
+            if imp > 5: # This logic implies 'imp' and 'exp' might be power rather than accumulated energy.
+                power = imp
+            else:
+                power = exp * -1
 
-        imp = self.__tcp_client.read_holding_registers(30865, ModbusDataType.UINT_32, unit=unit)
-        exp = self.__tcp_client.read_holding_registers(30867, ModbusDataType.UINT_32, unit=unit)
-        if imp > 5:
-            power = imp
-        else:
-            power = exp * -1
+            imported, exported = self.sim_counter.sim_count(power)
 
-        imported, exported = self.sim_counter.sim_count(power)
-
-        counter_state = CounterState(
-            imported=imported,
-            exported=exported,
-            power=power
-        )
-        self.store.set(counter_state)
+            counter_state = CounterState(
+                imported=imported,
+                exported=exported,
+                power=power
+            )
+            self.store.set(counter_state)
+            self.fault_state.set_fault(False)
+        except Exception as e:
+            log.error(
+                f"Error updating SMA Sunny Boy Counter id: {self.component_config.id}: {e}",
+                exc_info=True
+            )
+            self.fault_state.set_fault(True)
 
 
 component_descriptor = ComponentDescriptor(configuration_factory=SmaSunnyBoyCounterSetup)

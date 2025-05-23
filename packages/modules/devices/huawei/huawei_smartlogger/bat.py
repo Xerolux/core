@@ -4,12 +4,16 @@ from typing import TypedDict, Any
 from modules.common import modbus
 from modules.common.abstract_device import AbstractBat
 from modules.common.component_state import BatState
+import logging
+
 from modules.common.component_type import ComponentDescriptor
 from modules.common.fault_state import ComponentInfo, FaultState
 from modules.common.modbus import ModbusDataType
 from modules.common.simcount import SimCounter
 from modules.common.store import get_bat_value_store
 from modules.devices.huawei.huawei_smartlogger.config import Huawei_SmartloggerBatSetup
+
+log = logging.getLogger(__name__)
 
 
 class KwargsDict(TypedDict):
@@ -31,17 +35,27 @@ class Huawei_SmartloggerBat(AbstractBat):
 
     def update(self) -> None:
         modbus_id = self.component_config.configuration.modbus_id
-        power = self.__tcp_client.read_holding_registers(37765, ModbusDataType.INT_32, unit=modbus_id)
-        soc = self.__tcp_client.read_holding_registers(37760, ModbusDataType.INT_16, unit=modbus_id) / 10
+        try:
+            # Wordorder for multi-register reads defaults to Big Endian via common.modbus.py.
+            # This is generally appropriate for Huawei devices.
+            power = self.__tcp_client.read_holding_registers(37765, ModbusDataType.INT_32, unit=modbus_id)
+            soc = self.__tcp_client.read_holding_registers(37760, ModbusDataType.INT_16, unit=modbus_id) / 10
 
-        imported, exported = self.sim_counter.sim_count(power)
-        bat_state = BatState(
-            power=power,
-            soc=soc,
-            imported=imported,
-            exported=exported
-        )
-        self.store.set(bat_state)
+            imported, exported = self.sim_counter.sim_count(power)
+            bat_state = BatState(
+                power=power,
+                soc=soc,
+                imported=imported,
+                exported=exported
+            )
+            self.store.set(bat_state)
+            self.fault_state.set_fault(False)
+        except Exception as e:
+            log.error(
+                f"Error updating Huawei Smartlogger Battery id: {self.component_config.id}: {e}",
+                exc_info=True
+            )
+            self.fault_state.set_fault(True)
 
 
 component_descriptor = ComponentDescriptor(configuration_factory=Huawei_SmartloggerBatSetup)

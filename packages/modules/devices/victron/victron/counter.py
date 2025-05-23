@@ -4,12 +4,16 @@ from typing import TypedDict, Any
 from modules.common import modbus
 from modules.common.abstract_device import AbstractCounter
 from modules.common.component_state import CounterState
+import logging
+
 from modules.common.component_type import ComponentDescriptor
 from modules.common.fault_state import ComponentInfo, FaultState
 from modules.common.modbus import ModbusDataType
 from modules.common.simcount import SimCounter
 from modules.common.store import get_counter_value_store
 from modules.devices.victron.victron.config import VictronCounterSetup
+
+log = logging.getLogger(__name__)
 
 
 class KwargsDict(TypedDict):
@@ -32,39 +36,50 @@ class VictronCounter(AbstractCounter):
     def update(self):
         unit = self.component_config.configuration.modbus_id
         energy_meter = self.component_config.configuration.energy_meter
-        with self.__tcp_client:
+        # Initialize variables that might not be set if an early error occurs
+        voltages = currents = None 
+        try:
+            with self.__tcp_client:
+                # Wordorder not applicable for INT_16/UINT_16 list reads.
+                if energy_meter:
+                    powers_list = self.__tcp_client.read_holding_registers(2600, [ModbusDataType.INT_16]*3, unit=unit)
+                    currents = [
+                        self.__tcp_client.read_holding_registers(reg, ModbusDataType.INT_16, unit=unit) / 10
+                        for reg in [2617, 2619, 2621]]
+                    voltages = [
+                        self.__tcp_client.read_holding_registers(reg, ModbusDataType.UINT_16, unit=unit) / 10
+                        for reg in [2616, 2618, 2620]]
+                    power = sum(powers_list)
+                else:
+                    powers_list = self.__tcp_client.read_holding_registers(820, [ModbusDataType.INT_16]*3, unit=unit)
+                    power = sum(powers_list)
+
+            imported, exported = self.sim_counter.sim_count(power)
+
             if energy_meter:
-                powers = self.__tcp_client.read_holding_registers(2600, [ModbusDataType.INT_16]*3, unit=unit)
-                currents = [
-                    self.__tcp_client.read_holding_registers(reg, ModbusDataType.INT_16, unit=unit) / 10
-                    for reg in [2617, 2619, 2621]]
-                voltages = [
-                    self.__tcp_client.read_holding_registers(reg, ModbusDataType.UINT_16, unit=unit) / 10
-                    for reg in [2616, 2618, 2620]]
-                power = sum(powers)
+                counter_state = CounterState(
+                    voltages=voltages,
+                    currents=currents,
+                    powers=powers_list, # Use the locally fetched list name
+                    imported=imported,
+                    exported=exported,
+                    power=power
+                )
             else:
-                powers = self.__tcp_client.read_holding_registers(820, [ModbusDataType.INT_16]*3, unit=unit)
-                power = sum(powers)
-
-        imported, exported = self.sim_counter.sim_count(power)
-
-        if energy_meter:
-            counter_state = CounterState(
-                voltages=voltages,
-                currents=currents,
-                powers=powers,
-                imported=imported,
-                exported=exported,
-                power=power
+                counter_state = CounterState(
+                    powers=powers_list, # Use the locally fetched list name
+                    imported=imported,
+                    exported=exported,
+                    power=power
+                )
+            self.store.set(counter_state)
+            self.fault_state.set_fault(False)
+        except Exception as e:
+            log.error(
+                f"Error updating Victron Counter id: {self.component_config.id}: {e}",
+                exc_info=True
             )
-        else:
-            counter_state = CounterState(
-                powers=powers,
-                imported=imported,
-                exported=exported,
-                power=power
-            )
-        self.store.set(counter_state)
+            self.fault_state.set_fault(True)
 
 
 component_descriptor = ComponentDescriptor(configuration_factory=VictronCounterSetup)

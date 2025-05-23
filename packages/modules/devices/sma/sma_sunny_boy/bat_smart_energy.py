@@ -47,10 +47,24 @@ class SunnyBoySmartEnergyBat(AbstractBat):
         self.inverter_type = None
 
     def update(self) -> None:
-        self.store.set(self.read())
+        try:
+            state = self.read()
+            if state:  # read() now returns Optional[BatState]
+                self.store.set(state)
+                self.fault_state.set_fault(False)
+            # If read() returns None, it means an error occurred and fault_state was set there.
+        except Exception as e:
+            # This outer try-except is a fallback if read() itself has an unhandled exception
+            # or if an error occurs outside the Modbus calls within read().
+            log.error(
+                f"Unhandled error in SMA Sunny Boy Smart Energy Bat update for id: {self.component_config.id}: {e}",
+                exc_info=True
+            )
+            self.fault_state.set_fault(True)
 
-    def read(self) -> BatState:
+    def read(self) -> Optional[BatState]:
         unit = self.component_config.configuration.modbus_id
+        try:
 
         registers_to_read = [
             "Battery_SoC",
@@ -94,32 +108,56 @@ class SunnyBoySmartEnergyBat(AbstractBat):
             self.inverter_type = values["Inverter_Type"]
         log.debug(f"Inverter Type: {self.inverter_type}")
         log.debug(f"Bat {self.__tcp_client.address}: {bat_state}")
+        # Successfully read and processed data
+        # self.fault_state.set_fault(False) # Moved to update()
         return bat_state
+        except Exception as e:
+            log.error(
+                f"Error reading SMA Sunny Boy Smart Energy Bat id: {self.component_config.id}: {e}",
+                exc_info=True
+            )
+            self.fault_state.set_fault(True) # Set fault state here as read failed
+            return None
 
     def set_power_limit(self, power_limit: Optional[int]) -> None:
         unit = self.component_config.configuration.modbus_id
-
-        if power_limit is None:
-            if self.last_mode is not None:
-                # Kein Powerlimit gefordert, externe Steuerung war aktiv, externe Steuerung deaktivieren
-                log.debug("Keine Batteriesteuerung gefordert, deaktiviere externe Steuerung.")
+        try:
+            if power_limit is None:
+                if self.last_mode is not None:
+                    log.debug("Keine Batteriesteuerung gefordert, deaktiviere externe Steuerung.")
+                    values_to_write = {
+                        "Externe_Steuerung": 803,
+                        "Wirkleistungsvorgabe": 0,
+                    }
+                    self._write_registers(values_to_write, unit)
+                    self.last_mode = None
+            else:
+                log.debug("Aktive Batteriesteuerung vorhanden. Setze externe Steuerung.")
                 values_to_write = {
-                    "Externe_Steuerung": 803,
-                    "Wirkleistungsvorgabe": 0,
+                    "Externe_Steuerung": 802,
+                    "Wirkleistungsvorgabe": power_limit
                 }
                 self._write_registers(values_to_write, unit)
-                self.last_mode = None
-        else:
-            # Powerlimit gefordert, externe Steuerung aktivieren, Limit setzen
-            log.debug("Aktive Batteriesteuerung vorhanden. Setze externe Steuerung.")
-            values_to_write = {
-                "Externe_Steuerung": 802,
-                "Wirkleistungsvorgabe": power_limit
-            }
-            self._write_registers(values_to_write, unit)
-            self.last_mode = 'limited'
+                self.last_mode = 'limited'
+            # Assuming if _write_registers doesn't throw, the operation was successful regarding fault state.
+            # If granular fault for write is needed, _write_registers should return status or handle fault.
+            # For now, if no exception, assume success for this operation's impact on component health.
+            # self.fault_state.set_fault(False) # This might wrongly clear a fault from a failed read.
+            # Fault state for writes is tricky; usually, if a write fails, an exception is thrown.
+            # If it completes, it's "successful" but doesn't necessarily mean the overall component is fault-free
+            # if a previous read failed. Let's leave fault state primarily managed by read operations.
+        except Exception as e:
+            log.error(
+                f"Error setting power limit for SMA Sunny Boy Smart Energy Bat id: {self.component_config.id}: {e}",
+                exc_info=True
+            )
+            self.fault_state.set_fault(True) # A failed write operation is a fault.
+
 
     def _read_registers(self, register_names: list, unit: int) -> Dict[str, Union[int, float]]:
+        # This internal method does not handle exceptions itself; expects caller (read()) to handle.
+        # Wordorder for multi-register reads defaults to Big Endian via common.modbus.py.
+        # This is generally appropriate for SMA devices.
         values = {}
         for key in register_names:
             address, data_type = self.REGISTERS[key]
@@ -128,6 +166,7 @@ class SunnyBoySmartEnergyBat(AbstractBat):
         return values
 
     def _write_registers(self, values_to_write: Dict[str, Union[int, float]], unit: int) -> None:
+        # This internal method does not handle exceptions itself; expects caller (set_power_limit()) to handle.
         for key, value in values_to_write.items():
             address, data_type = self.REGISTERS[key]
             encoded_value = self._encode_value(value, data_type)
@@ -135,6 +174,7 @@ class SunnyBoySmartEnergyBat(AbstractBat):
             log.debug(f"Neuer Wert {encoded_value} in Register {address} geschrieben.")
 
     def _encode_value(self, value: Union[int, float], data_type: ModbusDataType) -> list:
+        # Wordorder is explicitly Big Endian here, which is correct for SMA.
         builder = pymodbus.payload.BinaryPayloadBuilder(
             byteorder=pymodbus.constants.Endian.Big,
             wordorder=pymodbus.constants.Endian.Big

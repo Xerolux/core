@@ -4,6 +4,8 @@ from typing import Dict, TypedDict, Any
 
 from modules.common import modbus
 from modules.common.abstract_device import AbstractCounter
+from pymodbus.constants import Endian
+
 from modules.common.component_state import CounterState
 from modules.common.component_type import ComponentDescriptor
 from modules.common.fault_state import ComponentInfo, FaultState
@@ -40,29 +42,46 @@ class SolaredgeCounter(AbstractCounter):
             self.__tcp_client, self.component_config.configuration.modbus_id, ModbusDataType.INT_16
         )
         self._read_scaled_uint32 = create_scaled_reader(
-            self.__tcp_client, self.component_config.configuration.modbus_id, ModbusDataType.UINT_32
+            self.__tcp_client, self.component_config.configuration.modbus_id, ModbusDataType.UINT_32, wordorder=Endian.Little
         )
 
     def update(self):
-        powers = [-power for power in self._read_scaled_int16(self.registers.powers, 4)]
-        currents = self._read_scaled_int16(self.registers.currents, 3)
-        voltages = self._read_scaled_int16(self.registers.voltages, 7)[:3]
-        frequency = self._read_scaled_int16(self.registers.frequency, 1)[0]
-        power_factors = [power_factor /
-                         100 for power_factor in self._read_scaled_int16(self.registers.power_factors, 3)]
-        counter_values = self._read_scaled_uint32(self.registers.imp_exp, 8)
-        counter_exported, counter_imported = [counter_values[i] for i in [0, 4]]
-        counter_state = CounterState(
-            imported=counter_imported,
-            exported=counter_exported,
-            power=powers[0],
-            powers=powers[1:],
-            voltages=voltages,
-            currents=currents,
-            power_factors=power_factors,
-            frequency=frequency
-        )
-        self.store.set(counter_state)
+        log.debug("Updating SolaredgeCounter id: %s", self.component_config.id)
+        try:
+            powers = [-power for power in self._read_scaled_int16(self.registers.powers, 4)]
+            log.debug("Counter %s: Powers: %s W", self.component_config.id, powers)
+            currents = self._read_scaled_int16(self.registers.currents, 3)
+            log.debug("Counter %s: Currents: %s A", self.component_config.id, currents)
+            voltages = self._read_scaled_int16(self.registers.voltages, 7)[:3] # First 3 are L-N voltages
+            log.debug("Counter %s: Voltages (L-N): %s V", self.component_config.id, voltages)
+            frequency = self._read_scaled_int16(self.registers.frequency, 1)[0]
+            log.debug("Counter %s: Frequency: %s Hz", self.component_config.id, frequency)
+            power_factors = [power_factor / 100 for power_factor in self._read_scaled_int16(self.registers.power_factors, 3)]
+            log.debug("Counter %s: Power Factors: %s", self.component_config.id, power_factors)
+            
+            # Registers.imp_exp (default 40226) should give 8 values:
+            # Exported Wh Total, Exported Wh PhA, Exported Wh PhB, Exported Wh PhC
+            # Imported Wh Total, Imported Wh PhA, Imported Wh PhB, Imported Wh PhC
+            counter_values = self._read_scaled_uint32(self.registers.imp_exp, 8)
+            counter_exported = counter_values[0]
+            counter_imported = counter_values[4]
+            log.debug("Counter %s: Exported: %s Wh, Imported: %s Wh", self.component_config.id, counter_exported, counter_imported)
+            
+            counter_state = CounterState(
+                imported=counter_imported,
+                exported=counter_exported,
+                power=powers[0],      # Total real power
+                powers=powers[1:],    # Per-phase real power
+                voltages=voltages,
+                currents=currents,
+                power_factors=power_factors,
+                frequency=frequency
+            )
+            self.store.set(counter_state)
+            self.fault_state.set_fault(False)
+        except Exception as e:
+            log.error("Error updating SolaredgeCounter id %s: %s", self.component_config.id, e, exc_info=True)
+            self.fault_state.set_fault(True)
 
 
 component_descriptor = ComponentDescriptor(configuration_factory=SolaredgeCounterSetup)

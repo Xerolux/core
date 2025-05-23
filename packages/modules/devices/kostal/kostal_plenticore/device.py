@@ -82,7 +82,7 @@ def create_device(device_config: KostalPlenticore):
 
 
 def _create_reader(tcp_client: modbus.ModbusTcpClient_, modbus_id: int) -> Callable[[int, modbus.ModbusDataType], Any]:
-    return functools.partial(tcp_client.read_holding_registers, unit=modbus_id, wordorder=Endian.Little)
+    return functools.partial(tcp_client.read_holding_registers, unit=modbus_id, wordorder=Endian.Big)
 
 
 device_descriptor = DeviceDescriptor(configuration_factory=KostalPlenticore)

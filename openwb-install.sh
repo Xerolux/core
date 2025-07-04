@@ -102,6 +102,18 @@ elif [ -d "/etc/php/7.4/" ]; then
 	echo "upload_max_filesize = 300M" > /etc/php/7.4/apache2/conf.d/20-uploadlimit.ini
 	echo "post_max_size = 300M" >> /etc/php/7.4/apache2/conf.d/20-uploadlimit.ini
 	echo "done (OS Bullseye)"
+elif [ -d "/etc/php/8.0/" ]; then
+	echo "upload_max_filesize = 300M" > /etc/php/8.0/apache2/conf.d/20-uploadlimit.ini
+	echo "post_max_size = 300M" >> /etc/php/8.0/apache2/conf.d/20-uploadlimit.ini
+	echo "done (OS Bookworm)"
+elif [ -d "/etc/php/8.1/" ]; then
+	echo "upload_max_filesize = 300M" > /etc/php/8.1/apache2/conf.d/20-uploadlimit.ini
+	echo "post_max_size = 300M" >> /etc/php/8.1/apache2/conf.d/20-uploadlimit.ini
+	echo "done (OS Bookworm)"
+elif [ -d "/etc/php/8.2/" ]; then
+	echo "upload_max_filesize = 300M" > /etc/php/8.2/apache2/conf.d/20-uploadlimit.ini
+	echo "post_max_size = 300M" >> /etc/php/8.2/apache2/conf.d/20-uploadlimit.ini
+	echo "done (OS Bookworm/Trixie)"
 fi
 echo -n "enabling apache ssl module..."
 a2enmod ssl
@@ -115,7 +127,17 @@ systemctl restart apache2
 echo "done"
 
 echo "installing python requirements..."
-sudo -u "$OPENWB_USER" pip install -r "${OPENWBBASEDIR}/requirements.txt"
+# Check Python version and use appropriate pip installation method
+PYTHON_VERSION=$(python3 --version 2>&1 | awk '{print $2}' | cut -d. -f1,2)
+echo "Detected Python version: $PYTHON_VERSION"
+
+if [[ "$PYTHON_VERSION" == "3.13" ]] || [[ "$PYTHON_VERSION" > "3.11" ]]; then
+	echo "Using --break-system-packages for Python $PYTHON_VERSION"
+	sudo -u "$OPENWB_USER" pip3 install -U --break-system-packages -r "${OPENWBBASEDIR}/requirements.txt"
+else
+	echo "Using standard pip installation for Python $PYTHON_VERSION"
+	sudo -u "$OPENWB_USER" pip install -r "${OPENWBBASEDIR}/requirements.txt"
+fi
 
 echo "installing openwb2 system service..."
 ln -s "${OPENWBBASEDIR}/data/config/openwb2.service" /etc/systemd/system/openwb2.service

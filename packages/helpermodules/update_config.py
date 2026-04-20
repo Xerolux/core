@@ -2180,7 +2180,7 @@ class UpdateConfig:
             # add "official" flag to selected backup cloud
             if re.search("openWB/system/backup_cloud/config", topic) is not None:
                 configuration_payload = decode_payload(payload)
-                if configuration_payload.get("type") == "nextcloud":
+                if configuration_payload.get("type") in ("nextcloud", "seafile"):
                     configuration_payload.update({"official": True})
                     return {topic: configuration_payload}
             # add "official" flag to selected electricity tariff provider
@@ -2984,12 +2984,15 @@ class UpdateConfig:
 
             configuration_payload = decode_payload(payload)
             cloud_type = configuration_payload.get("type")
-            if cloud_type not in ("nextcloud", "samba"):
+            if cloud_type not in ("nextcloud", "seafile", "samba"):
                 return None
 
             configuration_payload.setdefault("configuration", {})
             if configuration_payload["configuration"].get("max_backups") is None:
                 configuration_payload["configuration"]["max_backups"] = 0
+
+            if cloud_type == "seafile" and configuration_payload["configuration"].get("path") is None:
+                configuration_payload["configuration"]["path"] = ""
 
             return {topic: configuration_payload}
 

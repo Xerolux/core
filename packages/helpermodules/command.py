@@ -24,6 +24,7 @@ from helpermodules.abstract_plans import AutolockPlan, ScheduledChargingPlan, Ti
 from helpermodules.utils.run_command import run_command
 # ToDo: move to module commands if implemented
 from modules.backup_clouds.onedrive.api import generateMSALAuthCode, retrieveMSALTokens
+from modules.backup_clouds.google_drive.api import generateGoogleAuthCode, retrieveGoogleTokens
 from modules.io_devices.eebus.api import create_pub_cert_ski
 
 from helpermodules.broker import BrokerClient
@@ -1016,6 +1017,32 @@ class Command:
                              "und erneut versuchen.<br />", MessageType.WARNING)
             return
         result = retrieveMSALTokens(cloud_backup_config.config)
+        pub_user_message(payload, connection_id, result["message"], result["MessageType"])
+
+    # ToDo: move to module commands if implemented
+    def requestGoogleAuthCode(self, connection_id: str, payload: dict) -> None:
+        ''' fordert einen Authentifizierungscode für Google Device Authorization
+        an um Google Drive Backup zu ermöglichen'''
+        cloud_backup_config = SubData.system_data["system"].backup_cloud
+        if cloud_backup_config is None:
+            pub_user_message(payload, connection_id,
+                             "Es ist keine Backup-Cloud konfiguriert. Bitte Konfiguration speichern "
+                             "und erneut versuchen.<br />", MessageType.WARNING)
+            return
+        result = generateGoogleAuthCode(cloud_backup_config)
+        pub_user_message(payload, connection_id, result["message"], result["MessageType"])
+
+    # ToDo: move to module commands if implemented
+    def retrieveGoogleTokens(self, connection_id: str, payload: dict) -> None:
+        """ holt die Tokens für Google Device Authorization um Google Drive Backup zu ermöglichen
+        """
+        cloud_backup_config = SubData.system_data["system"].backup_cloud
+        if cloud_backup_config is None:
+            pub_user_message(payload, connection_id,
+                             "Es ist keine Backup-Cloud konfiguriert. Bitte Konfiguration speichern "
+                             "und erneut versuchen.<br />", MessageType.WARNING)
+            return
+        result = retrieveGoogleTokens(cloud_backup_config)
         pub_user_message(payload, connection_id, result["message"], result["MessageType"])
 
     def createEebusCert(self, connection_id: str, payload: dict) -> None:
